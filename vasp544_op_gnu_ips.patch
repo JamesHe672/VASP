@@ -1,0 +1,392 @@
+diff -urwi vasp.5.4.4/makefile.include vasp.5.4.4.new/makefile.include
+--- vasp.5.4.4/makefile.include	2017-04-20 05:04:22.000000000 -0400
++++ vasp.5.4.4.new/makefile.include	2019-07-14 22:18:52.548376050 -0400
+@@ -1,13 +1,13 @@
+ # Precompiler options
+ CPP_OPTIONS= -DHOST=\"LinuxGNU\" \
+-             -DMPI -DMPI_BLOCK=8000 \
++             -DMPI -DMPI_BLOCK=64000 \
+              -Duse_collective \
+-             -DscaLAPACK \
+-             -DCACHE_SIZE=4000 \
++             -DCACHE_SIZE=64000 \
+              -Davoidalloc \
+              -Duse_bse_te \
+              -Dtbdyn \
+-             -Duse_shmem
++             -Duse_shmem \
++             -Dkind8 -DPGI16
+ 
+ CPP        = gcc -E -P -C -w $*$(FUFFIX) >$*$(SUFFIX) $(CPP_OPTIONS)
+ 
+@@ -21,16 +21,16 @@
+ OFLAG_IN   = $(OFLAG)
+ DEBUG      = -O0
+ 
+-LIBDIR     = /opt/gfortran/libs/
+-BLAS       = -L$(LIBDIR) -lrefblas
+-LAPACK     = -L$(LIBDIR) -ltmglib -llapack
++LIBDIR     = /mnt/workspace/VASP/inst/lib64
++BLAS       = -L$(LIBDIR) -lopenblas
++LAPACK     = -L$(LIBDIR) -lopenblas
+ BLACS      = 
+-SCALAPACK  = -L$(LIBDIR) -lscalapack $(BLACS)
++SCALAPACK  = #-L$(LIBDIR) -lscalapack $(BLACS)
+ 
+ LLIBS      = $(SCALAPACK) $(LAPACK) $(BLAS)
+ 
+-FFTW       ?= /opt/gfortran/fftw-3.3.4-GCC-5.4.1
+-LLIBS      += -L$(FFTW)/lib -lfftw3
++FFTW       ?= /mnt/workspace/VASP/inst
++LLIBS      += -L$(FFTW)/lib64 -lfftw3
+ INCS       = -I$(FFTW)/include
+ 
+ OBJECTS    = fftmpiw.o fftmpi_map.o  fftw3d.o  fft3dlib.o
+@@ -70,11 +70,11 @@
+ CFLAGS     = -fPIC -DADD_ -openmp -DMAGMA_WITH_MKL -DMAGMA_SETAFFINITY -DGPUSHMEM=300 -DHAVE_CUBLAS
+ 
+ CUDA_ROOT  ?= /usr/local/cuda
+-NVCC       := $(CUDA_ROOT)/bin/nvcc
++NVCC       := $(CUDA_ROOT)/bin/nvcc -ccbin=/mnt/workspace/VASP/inst/bin/gcc -Xcompiler -ansi #-mabi=ieeelongdouble -Xcompiler -ansi
+ CUDA_LIB   := -L$(CUDA_ROOT)/lib64 -lnvToolsExt -lcudart -lcuda -lcufft -lcublas
+ 
+ GENCODE_ARCH    := -gencode=arch=compute_30,code=\"sm_30,compute_30\" \
+                    -gencode=arch=compute_35,code=\"sm_35,compute_35\" \
+                    -gencode=arch=compute_60,code=\"sm_60,compute_60\"
+ 
+-MPI_INC    = /opt/gfortran/openmpi-1.10.2/install/ompi-1.10.2-GFORTRAN-5.4.1/include
++MPI_INC    = /opt/ibm/spectrum_mpi/include
+diff -urwi vasp.5.4.4/src/makefile vasp.5.4.4.new/src/makefile
+--- vasp.5.4.4/src/makefile	2017-04-20 05:03:58.000000000 -0400
++++ vasp.5.4.4.new/src/makefile	2019-07-12 10:25:52.121686787 -0400
+@@ -65,14 +65,14 @@
+       FPP+=-DNGXhalf
+    endif
+    LIB  += CUDA
+-   LLIB += CUDA/lib/libCudaUtils_x86_64.a $(CUDA_LIB)
++   LLIB += CUDA/lib/libCudaUtils_ppc64le.a $(CUDA_LIB)
+    EXE=vasp_gpu
+    CPP_OPTIONS += $(CPP_GPU)
+    OBJS=$(SOURCE_GPU) $(OBJECTS_GPU)
+ else ifeq ($(VERSION),gpu_ncl)
+    EXE=vasp_gpu_ncl
+    LIB  += CUDA
+-   LLIB += CUDA/lib/libCudaUtils_x86_64.a $(CUDA_LIB)
++   LLIB += CUDA/lib/libCudaUtils_ppc64le.a $(CUDA_LIB)
+    CPP_OPTIONS += $(CPP_GPU)
+    OBJS=$(SOURCE_GPU) $(OBJECTS_GPU)
+ else
+@@ -84,11 +84,13 @@
+ OBJS_O2=$(filter-out $(OBJECTS_O1) $(OBJECTS_O2) $(OBJECTS_O3) $(OBJECTS_IN),$(SOURCE_O2)) $(OBJECTS_O2)
+ OBJS_O3=$(filter-out $(OBJECTS_O1) $(OBJECTS_O2) $(OBJECTS_O3) $(OBJECTS_IN),$(SOURCE_O3)) $(OBJECTS_O3)
+ OBJS_IN=$(filter-out $(OBJECTS_O1) $(OBJECTS_O2) $(OBJECTS_O3) $(OBJECTS_IN),$(SOURCE_IN)) $(OBJECTS_IN)
++OBJS_NOPAR=$(OBJECTS_NOPAR)
+ 
+ F90SRC_O1=$(OBJS_O1:.o=$(SUFFIX))
+ F90SRC_O2=$(OBJS_O2:.o=$(SUFFIX))
+ F90SRC_O3=$(OBJS_O3:.o=$(SUFFIX))
+ F90SRC_IN=$(OBJS_IN:.o=$(SUFFIX))
++F90SRC_N0PAR=$(OBJS_NOPAR:.o=$(SUFFIX))
+ 
+ ifeq ($(FFLAGS_1),)
+    FFLAGS_1=$(FFLAGS)
+@@ -184,6 +186,10 @@
+ $(OBJS_IN): %.o: %$(SUFFIX)
+ 	$(FC) $(FREE) $(FFLAGS_IN) $(OFLAG_IN) $(INCS_IN) -c $*$(SUFFIX)
+ 
++# $(OBJS_NOPAR): $(F90SRC_NOPAR)
++$(OBJS_NOPAR): %.o: %$(SUFFIX)
++	$(FC) $(FREE) $(FFLAGS_3) $(OFLAG_3) $(INCS_3) -c $*$(SUFFIX)
++
+ cleanall: clean
+ 	rm -rf $(LIB) *.F test.x
+ 
+diff -urwi vasp.5.4.4/src/CUDA/common.mk vasp.5.4.4.new/src/CUDA/common.mk
+--- vasp.5.4.4/src/CUDA/common.mk	2017-04-20 05:03:55.000000000 -0400
++++ vasp.5.4.4.new/src/CUDA/common.mk	2019-07-12 10:22:40.839894093 -0400
+@@ -107,6 +107,12 @@
+                 CXX_ARCH_FLAGS += -m32
+             endif
+         else
++            ifeq "$(strip $(ppc64le))" ""
++                NVCCFLAGS       += -m64
++                LIB_ARCH         = ppc64le
++                CUDPPLIB_SUFFIX  = ppc64le
++                CXX_ARCH_FLAGS += -m64
++            else
+             LIB_ARCH        = x86_64
+             CUDPPLIB_SUFFIX = x86_64
+             NVCCFLAGS      += -m64
+@@ -120,11 +126,13 @@
+         endif
+     endif
+ endif
++endif
+ 
+ # Compiler-specific flags (by default, we always use sm_10 and sm_20), unless we use the SMVERSION template
+ GENCODE_SM30 := -gencode=arch=compute_30,code=\"sm_30,compute_30\"
+ GENCODE_SM20 := -gencode=arch=compute_20,code=\"sm_20,compute_20\"
+ GENCODE_SM35 := -gencode=arch=compute_35,code=\"sm_35,compute_35\"
++GENCODE_SM60 := -gencode=arch=compute_60,code=\"sm_60,compute_60\"
+ 
+ CXXFLAGS  += $(CXXWARN_FLAGS) $(CXX_ARCH_FLAGS)
+ CFLAGS    += $(CWARN_FLAGS) $(CXX_ARCH_FLAGS)
+diff -urwi vasp.5.4.4/src/broyden.F vasp.5.4.4.new/src/broyden.F
+--- vasp.5.4.4/src/broyden.F	2019-07-12 05:42:08.163632224 -0400
++++ vasp.5.4.4.new/src/broyden.F	2019-07-12 05:47:54.508730130 -0400
+@@ -909,7 +909,7 @@
+         CALL DGEGV(0,GP,MAXIT,SP,MAXIT,AUXC,AUXBET,AUX,1,ITERM1, &
+        &        AUX,MAX(8*MAXIT,MAXIT*MAXIT))
+ #else
+-        CALL DGEGV('N','N',ITERM1,GP,MAXIT,SP,MAXIT,AUXR,AUXI,AUXBET, &
++        CALL DGGEV('N','N',ITERM1,GP,MAXIT,SP,MAXIT,AUXR,AUXI,AUXBET, &
+        &        AUX,1,AUX,1,AUX,MAX(8*MAXIT,MAXIT*MAXIT),INFO)
+         AUXC= CMPLX( AUXR , AUXI ,KIND=q)
+ #endif
+diff -urwi vasp.5.4.4/src/dynbr.F vasp.5.4.4.new/src/dynbr.F
+--- vasp.5.4.4/src/dynbr.F	2019-07-12 05:41:38.744898016 -0400
++++ vasp.5.4.4.new/src/dynbr.F	2019-07-12 05:45:09.665822780 -0400
+@@ -382,7 +382,7 @@
+          CALL DGEGV(0,GP,MAXIT,SP,MAXIT,AUXC,AUXBET,AUX,1,NORDER, &
+               AUX,MAXIT*MAXIT)
+ #else
+-         CALL DGEGV('N','N',NORDER,GP,MAXIT,SP,MAXIT,AUXR,AUXI,AUXBET, &
++         CALL DGGEV('N','N',NORDER,GP,MAXIT,SP,MAXIT,AUXR,AUXI,AUXBET, &
+               AUX,1,AUX,1,AUX,MAXIT*MAX(8,MAXIT),INFO)
+          AUXC= CMPLX( AUXR , AUXI ,KIND=q)
+ #endif
+diff -urwi vasp.5.4.4/src/fast_aug.F vasp.5.4.4.new/src/fast_aug.F
+--- vasp.5.4.4/src/fast_aug.F	2017-04-20 05:03:56.000000000 -0400
++++ vasp.5.4.4.new/src/fast_aug.F	2019-07-12 09:50:48.922133838 -0400
+@@ -122,9 +122,10 @@
+     TYPE (nonlr_struct) :: FAST_AUG
+ #ifndef PGI16
+     REAL(q), POINTER, CONTIGUOUS :: TRANS_MATRIX(:,:,:,:)
++    REAL(q), POINTER, CONTIGUOUS :: pTRANS_MATRIX(:,:,:)
+ #else
+     REAL(q), POINTER             :: TRANS_MATRIX(:,:,:,:)
+-    REAL(q), POINTER, CONTIGUOUS :: pTRANS_MATRIX(:,:,:)
++    REAL(q), POINTER             :: pTRANS_MATRIX(:,:,:)
+ #endif
+ 
+     INTEGER :: LMDIM             ! leading dimension of arrays like CDIJ
+@@ -415,9 +416,10 @@
+     TYPE (nonlr_struct) :: FAST_AUG_NEW
+ #ifndef PGI16
+     REAL(q), POINTER, CONTIGUOUS :: TRANS_MATRIX(:,:,:,:) 
++    REAL(q), POINTER, CONTIGUOUS :: pTRANS_MATRIX(:,:,:)
+ #else
+     REAL(q), POINTER             :: TRANS_MATRIX(:,:,:,:)
+-    REAL(q), POINTER, CONTIGUOUS :: pTRANS_MATRIX(:,:,:)
++    REAL(q), POINTER             :: pTRANS_MATRIX(:,:,:)
+ #endif
+     INTEGER        :: LMAX_FOCKAE, NMAX_FOCKAE
+ 
+@@ -518,7 +520,11 @@
+     IMPLICIT NONE
+ 
+     TYPE (nonlr_struct) :: FAST_AUG
++#ifndef PGI16
+     REAL(q), POINTER, CONTIGUOUS :: TRANS_MATRIX(:,:,:,:) 
++#else
++    REAL(q), POINTER             :: TRANS_MATRIX(:,:,:,:) 
++#endif
+   ! local
+     INTEGER NT
+ 
+@@ -1801,7 +1807,11 @@
+ 
+       TYPE (wavedes)  WDES
+       TYPE (wavedes1) AUG_DES
++#ifndef PGI16
+       REAL(q), CONTIGUOUS :: TRANS_MATRIX(:,:,:,:) 
++#else
++      REAL(q)             :: TRANS_MATRIX(:,:,:,:) 
++#endif
+       GDEF :: CRHODE(:,:,:,:)
+       GDEF :: CRHOLM(:)
+       REAL(q) :: FACT          ! arbitrary multiplication factor
+@@ -1863,7 +1873,11 @@
+       TYPE (wavedes1) WDES
+       TYPE (wavedes1) AUG_DES
+       LOGICAL LOVERL
++#ifndef PGI16
+       REAL(q), CONTIGUOUS :: TRANS_MATRIX(:, :, :, :)
++#else
++      REAL(q)             :: TRANS_MATRIX(:, :, :, :)
++#endif
+       GDEF  :: CPROJ1(:)
+       GDEF  :: CPROJ2(:)
+       GDEF  :: CTMP
+@@ -1929,7 +1943,11 @@
+       TYPE (wavedes1) WDES
+       TYPE (wavedes1) AUG_DES
+       LOGICAL LOVERL
++#ifndef PGI16
+       REAL(q), CONTIGUOUS :: TRANS_MATRIX(:, :, :, :)
++#else
++      REAL(q)             :: TRANS_MATRIX(:, :, :, :)
++#endif
+       GDEF  :: CPROJ1(:)
+       GDEF  :: CPROJ2(:)
+       GDEF  :: CTMP
+@@ -1990,7 +2008,11 @@
+       TYPE (wavedes1) WDES
+       TYPE (wavedes1) AUG_DES
+       LOGICAL LOVERL
++#ifndef PGI16
+       REAL(q), CONTIGUOUS :: TRANS_MATRIX(:, :, :, :)
++#else
++      REAL(q)             :: TRANS_MATRIX(:, :, :, :)
++#endif
+       GDEF  :: CPROJ1(:)
+       GDEF  :: CPROJ2(:)
+       GDEF  :: CTMP
+@@ -2058,7 +2080,11 @@
+       GDEF :: GU_R_PROJ(:,:)
+       GDEF :: GWORK(:,:)
+       INTEGER :: NP        ! number of grid points
++#ifndef PGI16
+       REAL(q), CONTIGUOUS :: TRANS_MATRIX(:, :, :)
++#else
++      REAL(q)             :: TRANS_MATRIX(:, :, :)
++#endif
+       INTEGER :: LMMAXC    ! maximum number of orbital channels
+       INTEGER :: LMBASE    ! base index
+       INTEGER :: NLM_LMMAX ! maximum number of charge channels
+@@ -2103,7 +2129,11 @@
+       TYPE (wavedes1) WDES
+       TYPE (wavedes1) AUG_DES
+       LOGICAL LOVERL
++#ifndef PGI16
+       REAL(q), CONTIGUOUS :: TRANS_MATRIX(:, :, :, :)
++#else
++      REAL(q)             :: TRANS_MATRIX(:, :, :, :)
++#endif
+       GDEF  :: CPROJ1(:)
+       GDEF  :: CPROJ2(:)
+       GDEF  :: CTMP
+@@ -2164,7 +2194,11 @@
+       TYPE (wavedes1) WDES
+       TYPE (wavedes1) AUG_DES
+       LOGICAL LOVERL
++#ifndef PGI16
+       REAL(q), CONTIGUOUS :: TRANS_MATRIX(:, :, :, :)
++#else
++      REAL(q)             :: TRANS_MATRIX(:, :, :, :)
++#endif
+       GDEF  :: CPROJ1(:)
+       GDEF  :: CPROJ2(:)
+       GDEF  :: CTMP
+@@ -2232,7 +2266,11 @@
+       TYPE (wavedes1) WDES
+       TYPE (wavedes1) AUG_DES
+       LOGICAL LOVERL
++#ifndef PGI16
+       REAL(q), CONTIGUOUS :: TRANS_MATRIX(:, :, :, :)
++#else
++      REAL(q)             :: TRANS_MATRIX(:, :, :, :)
++#endif
+       GDEF  :: CPROJ1(:)
+       GDEF  :: CPROJ2(:)
+       GDEF  :: CTMP
+@@ -2369,7 +2407,11 @@
+       TYPE (wavedes1) WDES
+       TYPE (wavedes1) AUG_DES
+       LOGICAL LOVERL
++#ifndef PGI16
+       REAL(q), CONTIGUOUS :: TRANS_MATRIX(:, :, :, :)
++#else
++      REAL(q)             :: TRANS_MATRIX(:, :, :, :)
++#endif
+       GDEF  :: CPROJ1(:)
+       GDEF  :: CPROJ2(:)
+       GDEF  :: CTMP
+@@ -2444,7 +2486,11 @@
+ 
+       TYPE (wavedes) WDES
+       TYPE (wavedes1) AUG_DES
++#ifndef PGI16
+       REAL(q), CONTIGUOUS :: TRANS_MATRIX(:,:,:,:) 
++#else
++      REAL(q)             :: TRANS_MATRIX(:,:,:,:) 
++#endif
+       GDEF CDIJ(:,:,:,:)
+       GDEF CDLM(:)
+       
+@@ -2503,7 +2549,11 @@
+ 
+       TYPE (wavedes) WDES
+       TYPE (wavedes1) AUG_DES
++#ifndef PGI16
+       REAL(q), CONTIGUOUS :: TRANS_MATRIX(:,:,:,:) 
++#else
++      REAL(q)             :: TRANS_MATRIX(:,:,:,:) 
++#endif
+       GDEF CDIJ(:,:,:,:)
+       GDEF CDLM(:)
+       INTEGER :: LMAX(:)
+@@ -2560,7 +2610,11 @@
+       GDEF :: GI_R_PROJ(:,:) ! in:   G(r', N beta)
+       GDEF :: GWORK(:,:)     ! in:   W(r',NLM)
+       INTEGER :: NP        ! number of grid points
++#ifndef PGI16
+       REAL(q), CONTIGUOUS :: TRANS_MATRIX(:, :, :)
++#else
++      REAL(q)             :: TRANS_MATRIX(:, :, :)
++#endif
+       INTEGER :: LMMAXC    ! maximum number of orbital channels
+       INTEGER :: LMBASE    ! base index
+       INTEGER :: NLM_LMMAX ! maximum number of charge channels
+@@ -3026,7 +3080,11 @@
+ 
+     INTEGER :: LD
+     INTEGER LMMAX
++#ifndef PGI16
+     REAL(q), CONTIGUOUS :: TRANS_MATRIX(LD, LD, LMMAX)
++#else
++    REAL(q)             :: TRANS_MATRIX(LD, LD, LMMAX)
++#endif
+     INTEGER :: LDCDIJ
+     GDEF CDLM(LMMAX)
+     GDEF CDIJ(LDCDIJ,LDCDIJ)
+diff -urwi vasp.5.4.4/src/wave.F vasp.5.4.4.new/src/wave.F
+--- vasp.5.4.4/src/wave.F	2017-04-20 05:04:00.000000000 -0400
++++ vasp.5.4.4.new/src/wave.F	2019-07-12 09:09:47.588017133 -0400
+@@ -176,15 +176,15 @@
+   !
+   TYPE wavespin
+      TYPE(wavedes),POINTER:: WDES         ! descriptor for orbital
+-!#ifndef PGI16
+-!     COMPLEX(q),POINTER,CONTIGUOUS:: CPTWFP(:,:,:,:) ! plane wave coefficients of orbital, (orbital) C_G,n,k,spin
+-!                                   ! indices: plane wave, local band index, k-point, spin
+-!     GDEF      ,POINTER,CONTIGUOUS:: CPROJ(:,:,:,:)  ! orbital character <p_alpha| phi_n,k,spin>
+-!                                   ! indices: projectors, local band index, k-point, spin
+-!#else
++#ifndef PGI16
++     COMPLEX(q),POINTER,CONTIGUOUS:: CPTWFP(:,:,:,:) ! plane wave coefficients of orbital, (orbital) C_G,n,k,spin
++                                   ! indices: plane wave, local band index, k-point, spin
++     GDEF      ,POINTER,CONTIGUOUS:: CPROJ(:,:,:,:)  ! orbital character <p_alpha| phi_n,k,spin>
++                                   ! indices: projectors, local band index, k-point, spin
++#else
+      COMPLEX(q),POINTER           :: CPTWFP(:,:,:,:)
+      GDEF      ,POINTER           :: CPROJ(:,:,:,:)
+-!#endif
++#endif
+      REAL(q),   POINTER:: FERWE(:,:,:)    ! fermi-weight for each band stored on local node
+                                    ! local band index, k-point, spin
+      REAL(q),   POINTER:: AUX  (:,:,:)    ! auxilary
+@@ -267,8 +267,13 @@
+      COMPLEX(q),POINTER           :: CPTWFP(:,:)
+      GDEF      ,POINTER           :: CPROJ(:,:)
+ #endif
++#ifndef PGI16
+      COMPLEX(q),POINTER,CONTIGUOUS:: CW_RED(:,:) ! redistributed orbitals
+      GDEF      ,POINTER,CONTIGUOUS:: CPROJ_RED(:,:)! orbital character redistributed
++#else
++     COMPLEX(q),POINTER           :: CW_RED(:,:) ! redistributed orbitals
++     GDEF      ,POINTER           :: CPROJ_RED(:,:)! orbital character redistributed
++#endif
+      REAL(q),   POINTER:: FERWE(:)    ! fermi-weight for each band
+      REAL(q),   POINTER:: AUX  (:)    ! auxilary
+      COMPLEX(q),POINTER:: CELEN(:)    ! eigenvalues
